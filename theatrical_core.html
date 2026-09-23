@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JBH Cinema Playout Engine</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      color: #fff;
+      font-family: monospace;
+      overflow: hidden;
+      user-select: none;
+    }
+    #auditorium {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #111;
+      transition: background 2.5s ease;
+    }
+    .screen-frame {
+      position: relative;
+      width: 100vw;
+      aspect-ratio: 2.39 / 1;
+      background: #000;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 100px rgba(0, 0, 0, 0.95);
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+    #ad-shield {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      background: transparent;
+      display: none;
+      cursor: pointer;
+    }
+    .masking {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 50%;
+      background: #2a0303;
+      border-right: 2px solid #150000;
+      z-index: 10;
+      pointer-events: none;
+      transition: transform 3.5s cubic-bezier(0.25, 1, 0.5, 1);
+    }
+    #curtain-l { left: 0; transform: translateX(0); }
+    #curtain-r { right: 0; transform: translateX(0); }
+    .curtains-open #curtain-l { transform: translateX(-100%); }
+    .curtains-open #curtain-r { transform: translateX(100%); }
+
+    #operator-panel {
+      position: fixed;
+      inset: 0;
+      background: #080808;
+      z-index: 30;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+    .kdm-card {
+      border: 1px solid #333;
+      background: #111;
+      padding: 24px 36px;
+      border-radius: 6px;
+      text-align: center;
+      min-width: 350px;
+    }
+    button {
+      padding: 14px 32px;
+      background: #e50914;
+      color: #fff;
+      border: none;
+      font-weight: bold;
+      font-size: 15px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s ease;
+    }
+    button:disabled {
+      background: #333;
+      cursor: not-allowed;
+      color: #777;
+    }
+    button:hover:not(:disabled) {
+      background: #b20710;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="operator-panel">
+    <div class="kdm-card">
+      <h3 style="letter-spacing: 1.5px;">JBH THEATRICAL SERVER</h3>
+      <p id="cpl-display" style="color: #888; margin: 10px 0;">SYNCING DISTRIBUTION NETWORK...</p>
+      <div id="kdm-status" style="color: #ffaa00;">• QUERYING CLOUD LICENSE...</div>
+    </div>
+    <button id="start-btn" disabled>CONNECTING...</button>
+  </div>
+
+  <div id="auditorium">
+    <div class="screen-frame">
+      <div id="curtain-l" class="masking"></div>
+      <div id="curtain-r" class="masking"></div>
+      <div id="ad-shield"></div>
+      <iframe 
+        id="theatrical-frame" 
+        src="" 
+        sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
+        allow="autoplay *; fullscreen *; encrypted-media *;" 
+        allowfullscreen>
+      </iframe>
+    </div>
+  </div>
+
+  <script>
+    const MANIFEST_URL = window.JBH_CONFIG_ENDPOINT;
+    const VIDCORE_BASE = "https://vidcore.net/movie/";
+
+    let targetPlayoutUrl = "";
+    const operatorPanel = document.getElementById("operator-panel");
+    const startBtn = document.getElementById("start-btn");
+    const auditorium = document.getElementById("auditorium");
+    const frame = document.getElementById("theatrical-frame");
+    const adShield = document.getElementById("ad-shield");
+    const cplDisplay = document.getElementById("cpl-display");
+    const kdmStatus = document.getElementById("kdm-status");
+
+    window.addEventListener("beforeunload", (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    });
+
+    window.open = function () {
+      console.warn("JBH Security: Rogue popup blocked.");
+      return null;
+    };
+
+    async function syncPlayoutManifest() {
+      try {
+        const response = await fetch(`${MANIFEST_URL}?t=${Date.now()}`);
+        if (!response.ok) throw new Error("Manifest unreachable");
+
+        const data = await response.json();
+        cplDisplay.textContent = `CPL: ${data.cpl_title}`;
+
+        if (!data.is_active) {
+          denyPlayout("SERVER LOCKED BY DISTRIBUTOR");
+          return;
+        }
+
+        const now = new Date();
+        const validUntil = new Date(data.valid_until);
+        if (now > validUntil) {
+          denyPlayout(`SHOW RUN EXPIRED ON ${validUntil.toLocaleDateString()}`);
+          return;
+        }
+
+        targetPlayoutUrl = `${VIDCORE_BASE}${data.video_id}?autoPlay=true`;
+
+        kdmStatus.textContent = "• KDM: ACTIVE / THEATRICAL RUN";
+        kdmStatus.style.color = "#00ff66";
+        startBtn.textContent = "INITIATE THEATRICAL PLAYOUT";
+        startBtn.disabled = false;
+
+      } catch (err) {
+        console.error(err);
+        denyPlayout("NETWORK ERROR: FAILED TO VERIFY KDM");
+      }
+    }
+
+    function denyPlayout(reason) {
+      kdmStatus.textContent = `• ACCESS DENIED: ${reason}`;
+      kdmStatus.style.color = "#ff3333";
+      startBtn.textContent = "PLAYOUT LOCKED";
+      startBtn.disabled = true;
+    }
+
+    syncPlayoutManifest();
+
+    startBtn.addEventListener("click", () => {
+      if (!targetPlayoutUrl) return;
+
+      operatorPanel.style.display = "none";
+      frame.src = targetPlayoutUrl;
+
+      adShield.style.display = "block";
+
+      setTimeout(() => {
+        auditorium.classList.add("curtains-open");
+        auditorium.style.background = "#000000";
+      }, 300);
+
+      setTimeout(() => {
+        adShield.style.display = "none";
+      }, 5000);
+
+      if (document.documentElement.requestFullscreen) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    });
+
+    adShield.addEventListener("click", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      adShield.style.display = "none";
+    });
+  </script>
+</body>
+</html>
